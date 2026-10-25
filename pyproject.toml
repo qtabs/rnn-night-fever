@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rnf"
+version = "0.1.0"
+description = "RNN Night Fever: does hippocampal replay emerge when recurrent neural networks go to sleep?"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = ["torch", "numpy", "matplotlib", "pytest"]
+
+[tool.setuptools]
+packages = ["rnf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
