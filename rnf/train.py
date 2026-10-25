@@ -139,7 +139,7 @@ def train(cfg):
                 log.writerow([step, *vals, round(time.time() - t0, 1)])
                 fh.flush()
                 print(f"step {step:5d} " + " ".join(f"{k} {v:.3f}" for k, v in zip(keys, vals))
-                      + f" ({time.time() - t0:.0f}s)")
+                      + f" ({time.time() - t0:.0f}s)", flush=True)
 
     torch.save(model.state_dict(), run_dir / "model.pt")
     print(f"Saved to {run_dir}/")
