@@ -46,7 +46,7 @@ class NightFever(nn.Module):
 		self.fast_slow = nn.Linear(n_hidden_fast, n_hidden_slow)   # fast -> slow
 		self.fast_perc = nn.Linear(n_hidden_fast, n_hidden_perception)   # fast -> perception
 		self.slow_perc = nn.Linear(n_hidden_slow, n_hidden_perception)   # slow -> perception
-		self.slow_fast = nn.Linear(n_hidden_fast, n_hidden_slow)   # slow -> fast
+		self.slow_fast = nn.Linear(n_hidden_slow, n_hidden_fast)   # slow -> fast
 
 
 	def forward(self, x):
