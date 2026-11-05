@@ -23,9 +23,9 @@ class NightFever(nn.Module):
 		super(NightFever, self).__init__()
 
 		if sizes is None:
-			n_hidden_perception = 2 * n_dim
-			n_hidden_slow = 6 * n_dim 
-			n_hidden_fast = 512
+			n_hidden_perception = 2 * n_dim   # P smallest
+			n_hidden_slow = 4 * n_dim         # H small, limited capacity
+			n_hidden_fast = 32 * n_dim        # C much larger
 		else:
 			n_hidden_perception, n_hidden_slow, n_hidden_fast = sizes
 
