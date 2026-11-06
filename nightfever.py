@@ -18,50 +18,90 @@ P_EPS = 1e-6
 class NightFever(nn.Module):
 	""" Core model with the three RNN circuit """
 
-	def __init__(self, n_dim, dev, sizes=None, batch_size=None):
+	def __init__(self, n_dim, dev, sizes=None, batch_size=None, n_msg=None):
 
 		super(NightFever, self).__init__()
 
 		if sizes is None:
-			n_hidden_perception = 2 * n_dim
-			n_hidden_slow = 6 * n_dim 
-			n_hidden_fast = 512
+			n_hidden_perception = 2 * n_dim   # P smallest
+			n_hidden_fast = 4 * n_dim         # H small, limited capacity
+			n_hidden_slow = 32 * n_dim        # C much larger
 		else:
 			n_hidden_perception, n_hidden_slow, n_hidden_fast = sizes
 
-		self.n_hidden_perception = n_hidden_perception
-		self.n_hidden_slow = n_hidden_slow
-		self.n_hidden_fast = n_hidden_fast
+		self.n_p = n_hidden_perception
+		self.n_c = n_hidden_slow
+		self.n_h = n_hidden_fast
 		self.n_dim = n_dim
 		self.dev   = dev
 		self.batch_size = batch_size
+		self.n_msg = n_dim if n_msg is None else n_msg    # bottleneck size
 
-		self.perception = RNN(n_dim, 1, n_hidden_perception, dev, batch_size)
-		self.fast = RNN(n_dim, 1, n_hidden_fast, dev, batch_size)
-		self.slow = RNN(n_dim, 2, n_hidden_slow, dev, batch_size)
+		# three networks, one step at a time
+		self.cell_p = nn.GRUCell(n_dim + self.n_msg, self.n_p)   # input: item + message
+		self.cell_h = nn.GRUCell(self.n_msg, self.n_h)           # input: message
+		self.cell_c = nn.GRUCell(self.n_msg, self.n_c)           # input: message
 
-		# Each RNN takes and returns an n_dim vector, so every link is n_dim -> n_dim.
-		self.perc_fast = nn.Linear(n_hidden_perception, n_hidden_fast)   # perception -> fast
-		self.perc_slow = nn.Linear(n_hidden_perception, n_hidden_slow)   # perception -> slow
-		self.fast_slow = nn.Linear(n_hidden_fast, n_hidden_slow)   # fast -> slow
-		self.fast_perc = nn.Linear(n_hidden_fast, n_hidden_perception)   # fast -> perception
-		self.slow_perc = nn.Linear(n_hidden_slow, n_hidden_perception)   # slow -> perception
-		self.slow_fast = nn.Linear(n_hidden_fast, n_hidden_slow)   # slow -> fast
+		# the six links, sender's state > bottleneck msg
+		self.p_to_h = nn.Linear(self.n_p, self.n_msg)   # perception -> fast
+		self.p_to_c = nn.Linear(self.n_p, self.n_msg)   # perception -> slow
+		self.h_to_c = nn.Linear(self.n_h, self.n_msg)  # fast -> slow
+		self.h_to_p = nn.Linear(self.n_h, self.n_msg)   # fast -> perception
+		self.c_to_p = nn.Linear(self.n_c, self.n_msg)  # slow -> perception
+		self.c_to_h = nn.Linear(self.n_c, self.n_msg)   # slow -> fast
+		
+		# only P produces the output
+		self.readout = nn.Linear(self.n_p, n_dim)
 
+		self.to(dev)
 
 	def forward(self, x):
 		batch_size, n_tokens, n_dim = x.shape
-		total_out = torch.zeros(batch_size, n_tokens, n_dim, device=x.device)
 
-		for t in range(n_tokens):                       # one token at a time, so they can talk
-			token = x[:, t:t+1]                         # keep the time dim: (B, 1, n_dim)
-			perc  = self.perception(token)             # perception reads the token
-			fast  = self.fast(self.perc_fast(perc))    # fast reads perception
-			slow  = self.slow(self.perc_slow(perc) + self.fast_slow(fast))  # slow reads perc + fast
-			# top-down: fast and slow feed back into perception for this step's readout
-			total_out[:, t] = self.perception(self.fast_perc(fast) + self.slow_perc(slow))[:, 0]
+		# memories are reset once per episode
+		p = torch.zeros(batch_size, self.n_p, device=x.device)
+		h = torch.zeros(batch_size, self.n_h, device=x.device)
+		c = torch.zeros(batch_size, self.n_c, device=x.device)
+		
+		keys = ["p", "h", "c",
+		        "msg_p_to_h", "msg_p_to_c", "msg_h_to_p",
+		        "msg_h_to_c", "msg_c_to_p", "msg_c_to_h"]
+		record = {k: [] for k in keys}
+		ys = []
 
-		return total_out 
+		for t in range(n_tokens):
+			# messages from previous step's states
+			m_p_to_h = self.p_to_h(p)
+			m_p_to_c = self.p_to_c(p)
+			m_h_to_p = self.h_to_p(h)
+			m_h_to_c = self.h_to_c(h)
+			m_c_to_p = self.c_to_p(c)
+			m_c_to_h = self.c_to_h(c)
+
+			# each networks input (sum of two messages it receives)
+			# P receives addtional item
+			in_p = torch.cat([x[:, t], m_h_to_p + m_c_to_p], dim=-1)   # item + message
+			in_h = m_p_to_h + m_c_to_h
+			in_c = m_p_to_c + m_h_to_c
+
+			# everyone updates
+			p = self.cell_p(in_p, p)
+			h = self.cell_h(in_h, h)
+			c = self.cell_c(in_c, c)
+
+			# P produces output
+			ys.append(torch.sigmoid(self.readout(p)).clamp(P_EPS, 1 - P_EPS))
+
+			for k, v in zip(keys, [p, h, c, m_p_to_h, m_p_to_c, m_h_to_p,
+			                       m_h_to_c, m_c_to_p, m_c_to_h]):
+				record[k].append(v)
+				
+		y = torch.stack(ys, dim=1)
+		states = {k: torch.stack(v, dim=1) for k, v in record.items()}
+		return y, states
+
+
+		 
 
 
 class RNN(nn.Module):
