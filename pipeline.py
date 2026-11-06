@@ -4,8 +4,6 @@
    #  3. Trains the bare RNN over it, printing the metrics we will interpret.
 
 # I will build the reconstruction for now, then we can improve the pipeline with slowneess later.
-# NOTE: noise now comes from the generator (songwriter.generate_discography returns clean + noisy),
-#       so the pipeline no longer adds noise itself.
 
 
 import numpy as np
@@ -54,18 +52,36 @@ def build_episode(schedule, n_dim, n_bands, n_songs, noise_std=0.5):
 
 # Addition 2 (separate, customizable loss)
 
-def compute_loss(output, target, mask, states=None):
-    """Training loss, reconstruction error only for now.
-    Later we will add the slowness terms (KL on states, using 'states')."""
+### SLOWNESS, NEEDS CHECKING
 
-    bce = F.binary_cross_entropy(output, target, reduction="none").mean(-1)  # (B, T)
-    recon = bce[mask].mean()  # average over day steps
 
-    # slowness: make HPC slower than P, PFC slower than HPC,
-    # by adding a KL term on the networks' states (Alex / Nirmi / Jacy own the circuit states)
+# The formula form Alex's board
+# Gaussian mean, so KL(N(h^t,I) || N(h^{t+1},I)) = 0.5 * sum((h^{t+1} - h^t)^2).
 
-    return recon
+def kl_slowness(state):
+    delta = state[:, 1:] - state[:, :-1] #  change from each token to the next -> (B, T-1, H)
+    # state 1: every token from the 2nd onward, state 2: every token except the last.
+    kl = 0.5 * (delta ** 2).sum(-1) # # (B, T-1): the KL (slowness cost) at each step
+    # how big was the change
+    return kl.mean()
 
+# big = the state is fast, small = slow
+
+def compute_loss(output, target, mask, states=None, alpha_fast=0.0, alpha_slow=0.0):
+    """Reconstruction (BCE) + optional slowness penalties on the circuit's states.
+    alpha_fast slows the hippocampus; alpha_slow slows the cortex/PFC (set it larger)."""
+
+    bce   = F.binary_cross_entropy(output, target, reduction="none").mean(-1)  # (B, T)
+    recon = bce[mask].mean()                     # reconstruction on day steps
+    loss  = recon
+
+    if states is not None:                       # the circuit passes its state trajectories
+        if "fast" in states:                     # hippocampus
+            loss = loss + alpha_fast * kl_slowness(states["fast"])
+        if "slow" in states:                     # cortex / PFC
+            loss = loss + alpha_slow * kl_slowness(states["slow"])
+
+    return loss
 
 # Training loop
 def train(schedule, n_dim=10, n_bands=4, n_songs=8, n_batches=301, lr=1e-2, n_hidden=32, noise_std=0.5):
@@ -94,12 +110,4 @@ if __name__ == "__main__":
 # on, the weights aren’t memorizing any particular grammar
 # they’re learning a general strategy for quickly cleaning
 # up noise in whatever world shows up. That’s the meta-learning
-# It is adapting to a new world each time is harder than masterin one.
-
-
-
-# pipeline schedule = not n_tokens but n_batches   # (note: batch comes from n_bands * n_songs)
-# gonna sample from generate discography, it already has a noise.
-# specify n_tokens and n_songs
-# band X discography_object
-# definte the parameters
+# It is adapting to a new world each time is harder than mastering one.
