@@ -54,7 +54,7 @@ def compute_loss(output, target, mask, states_fast, states_slow, w_fast, w_slow)
     derivatives_fast = ((states_fast[:, 1:] - states_fast[:, :-1])**2).mean()
     derivatives_slow = ((states_slow[:, 1:] - states_slow[:, :-1])**2).mean()
 
-    loss = error + w_fast * derivatives_fast + w_slow + derivatives_slow
+    loss = error + w_fast * derivatives_fast + w_slow * derivatives_slow
 
     return loss
 
