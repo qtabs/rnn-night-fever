@@ -175,7 +175,7 @@ class DiscoBand():
         return np.concatenate([self.write_song(n_tokens) for _ in range(n_songs)], axis=0)
 
 class DiscoFirm():
-    def __init__(self, n_dim, n_bands, noise_sigma=0.1, seed=None):                    # noise_sigma = the sigma in y = x + sigma*epsilon; seed=None -> fresh OS entropy
+    def __init__(self, n_dim, n_bands, noise_sigma=0.1, seed=None):                    # noise_sigma = the sigma in y = x + sigma*|epsilon|; seed=None -> fresh OS entropy
         *bs, ns = np.random.SeedSequence(seed).spawn(n_bands + 1)                      # one independent child seed per band (bs) + one spare for noise (ns)
         self.bands = [DiscoBand(n_dim, s) for s in bs]                                 # each band = its own TPMs, its own 1-4 -> motif map, its own vector dictionary
         self.noise_rng = np.random.default_rng(ns)
@@ -183,7 +183,7 @@ class DiscoFirm():
 
     def add_noise(self, x):
         nu = self.noise_rng.standard_normal(x.shape)
-        return x + self.noise_sigma * abs(nu)          # epsilon ~ N(0,1) per element; new float array, x untouched; advances noise_rng each call
+        return x + self.noise_sigma * abs(nu)          # half-normal noise: |epsilon|, epsilon ~ N(0,1) per element, so noise is always positive; new float array, x untouched; advances noise_rng each call
 
     def generate_discography(self, n_tokens, n_songs):
         d = np.concatenate([b.write_album(n_tokens, n_songs) for b in self.bands])     # (n_bands*n_songs, n_tokens, n_dim), blocked by band: rows 0..n_songs-1 are band 0
