@@ -11,7 +11,9 @@ import songwriter
 
 P_EPS = 1e-6
 
-
+def link(n_src, n_msg, n_tgt):
+	""" sender state (n_src) -> bottleneck (n_msg) -> target size (n_tgt) """
+	return nn.Sequential(nn.Linear(n_src, n_msg), nn.Linear(n_msg, n_tgt))
 
 ## Classes
 
@@ -37,18 +39,17 @@ class NightFever(nn.Module):
 		self.batch_size = batch_size
 		self.n_msg = n_dim if n_msg is None else n_msg    # bottleneck size
 
-		# three networks, one step at a time
-		self.cell_p = nn.GRUCell(n_dim + self.n_msg, self.n_p)   # input: item + message
-		self.cell_h = nn.GRUCell(self.n_msg, self.n_h)           # input: message
-		self.cell_c = nn.GRUCell(self.n_msg, self.n_c)           # input: message
+		self.cell_p = nn.GRUCell(n_dim + self.n_p, self.n_p)     # input: item + summed links
+		self.cell_h = nn.GRUCell(self.n_h, self.n_h)             # input: summed links
+		self.cell_c = nn.GRUCell(self.n_c, self.n_c)             # input: summed links
 
 		# the six links, sender's state > bottleneck msg
-		self.p_to_h = nn.Linear(self.n_p, self.n_msg)   # perception -> fast
-		self.p_to_c = nn.Linear(self.n_p, self.n_msg)   # perception -> slow
-		self.h_to_c = nn.Linear(self.n_h, self.n_msg)  # fast -> slow
-		self.h_to_p = nn.Linear(self.n_h, self.n_msg)   # fast -> perception
-		self.c_to_p = nn.Linear(self.n_c, self.n_msg)  # slow -> perception
-		self.c_to_h = nn.Linear(self.n_c, self.n_msg)   # slow -> fast
+		self.p_to_h = link(self.n_p, self.n_msg, self.n_h)   # perception -> fast
+		self.p_to_c = link(self.n_p, self.n_msg, self.n_c)   # perception -> slow
+		self.h_to_c = link(self.n_h, self.n_msg, self.n_c)   # fast -> slow
+		self.h_to_p = link(self.n_h, self.n_msg, self.n_p)   # fast -> perception
+		self.c_to_p = link(self.n_c, self.n_msg, self.n_p)   # slow -> perception
+		self.c_to_h = link(self.n_c, self.n_msg, self.n_h)   # slow -> fast
 		
 		# only P produces the output
 		self.readout = nn.Linear(self.n_p, n_dim)
@@ -71,18 +72,19 @@ class NightFever(nn.Module):
 
 		for t in range(n_tokens):
 			# messages from previous step's states
-			m_p_to_h = self.p_to_h(p)
-			m_p_to_c = self.p_to_c(p)
-			m_h_to_p = self.h_to_p(h)
-			m_h_to_c = self.h_to_c(h)
-			m_c_to_p = self.c_to_p(c)
-			m_c_to_h = self.c_to_h(c)
+			# squeeze: sender's previous state -> bottleneck (n_msg)
+			m_p_to_h = self.p_to_h[0](p)
+			m_p_to_c = self.p_to_c[0](p)
+			m_h_to_p = self.h_to_p[0](h)
+			m_h_to_c = self.h_to_c[0](h)
+			m_c_to_p = self.c_to_p[0](c)
+			m_c_to_h = self.c_to_h[0](c)
 
 			# each networks input (sum of two messages it receives)
 			# P receives addtional item
-			in_p = torch.cat([x[:, t], m_h_to_p + m_c_to_p], dim=-1)   # item + message
-			in_h = m_p_to_h + m_c_to_h
-			in_c = m_p_to_c + m_h_to_c
+			in_p = torch.cat([x[:, t], self.h_to_p[1](m_h_to_p) + self.c_to_p[1](m_c_to_p)], dim=-1)
+			in_h = self.p_to_h[1](m_p_to_h) + self.c_to_h[1](m_c_to_h)
+			in_c = self.p_to_c[1](m_p_to_c) + self.h_to_c[1](m_h_to_c)
 
 			# everyone updates
 			p = self.cell_p(in_p, p)
