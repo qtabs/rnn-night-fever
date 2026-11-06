@@ -157,17 +157,15 @@ def train(schedule, n_dim=6, n_bands=32, n_songs=1, n_epochs=100, lr=2e-2, noise
 # Training sweep
 def train_all_models(schedule, n_dim=6, n_bands=32, n_songs=1, n_epochs=100, lr=1e-2):
 
-    noise_levels = [0.01, 0.2, 0.5] 
-    w_fast_vals  = [0, 1, 5]
-    w_slow_vals  = [0, 5, 20]
+    noise_levels = [0.2, 0.5, 0.001] 
+    w_vals  = [(1, 5), (1, 10), (2, 10), (5, 10), (0, 0)]
 
     for noise in noise_levels:
-        for w_fast in w_fast_vals:
-            for w_slow in w_slow_vals:
-                print(f'\n\n### Training model ({noise}, ({w_fast}, ({w_slow}))) ###\n')
-                train(schedule, n_dim, n_bands, n_songs, n_epochs, lr, noise, (w_fast, w_slow))
-                print(f'\n')
+        for w in w_vals:
+            print(f'\n\n### Training model ({noise}, ({w})) ###\n')
+            train(schedule, n_dim, n_bands, n_songs, n_epochs, lr, noise, w)
+            print(f'\n')
 
 
 if __name__ == "__main__":
-    train(schedule)
+    train_all_models(schedule)
