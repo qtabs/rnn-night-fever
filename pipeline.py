@@ -1,70 +1,62 @@
-# This pipeline will do the following:
-   #  1. Takes a schedule list and builds one episode by stitching day/night blocks together,
-   #  2. Build the reconstruction only for now,add slowness later.
-   #  3. Trains the bare RNN over it, printing the metrics we will interpret.
-
-# I will build the reconstruction for now, then we can improve the pipeline with slowneess later.
-# NOTE: noise now comes from the generator (songwriter.generate_discography returns clean + noisy),
-#       so the pipeline no longer adds noise itself.
-
-
 import numpy as np
 import torch
-import torch.nn.functional as F
+import songwriter
+import nightfever
 
 
-from songwriter import DiscoFirm  # many worlds in one batch; gives clean + noisy
-from nightfever import RNN        # the bare RNN, we will swap with the circuit later
+schedule = [{"type": "day", "n_tokens": 512},
+            {"type": "night", "n_tokens": 256},
+            {"type": "day", "n_tokens": 512},
+            {"type": "night", "n_tokens": 256},
+            {"type": "day", "n_tokens": 512},  
+            {"type": "night", "n_tokens": 256},
+            {"type": "day", "n_tokens": 512},
+            {"type": "night", "n_tokens": 256},
+            {"type": "day", "n_tokens": 512},          
+            {"type": "night", "n_tokens": 256},
+            {"type": "day", "n_tokens": 512}]
 
-# Alejandro's request
 
-schedule = [{"type": "day", "n_tokens": 1024},
-            {"type": "night", "n_tokens": 512},
-            {"type": "day", "n_tokens": 1024},
-            {"type": "night", "n_tokens": 512}]
-
-# schedule is Alejandro's 1024/512 (slow). For a quick test, shrink n_tokens (e.g. 40/20).
-# n_tokens = how long that block is. The batch size comes from n_bands * n_songs (below).
-
-## build_episode
-
-# Turn the schedule into one episode (First addition)
-
-def build_episode(schedule, n_dim, n_bands, n_songs, noise_std=0.5):
-    """Stitch day/night blocks into one episode, following the schedule.
+def build_epoch_training_set(schedule, n_dim, n_bands, n_songs, noise_std=0.5):
+    """
+    Stitch day/night blocks into one episode, following the schedule.
     Day blocks come from generate_discography (clean + noisy, across many worlds);
-    night blocks are silence that doesn't count toward the loss."""
+    night blocks are silence that doesn't count toward the loss.
+    """
 
-    firm  = DiscoFirm(n_dim, n_songs, n_bands)  # the worlds for this episode
-    batch = n_bands * n_songs                              # total songs in the batch
-    inputs, targets, masks = [], [], []
+    firm = songwriter.DiscoFirm(n_dim, n_bands)
+    batch_size  = n_bands * n_songs
+    episode_len = sum([block['n_tokens'] for block in schedule])
+
+    samples = torch.zeros(batch_size, episode_len, n_dim)
+    targets = torch.zeros(batch_size, episode_len, n_dim)
+    mask    = torch.zeros(batch_size, episode_len, n_dim, dtype=torch.bool)
+    t0, t1  = 0, 0
+    
     for block in schedule:
-        L = block["n_tokens"]  # length of this block
+        
+        t1 += block["n_tokens"]
+
         if block["type"] == "day":
-            clean, noisy = firm.generate_discography(L, n_songs, noise_std=noise_std)  # noise from generator
-            clean = torch.tensor(clean); noisy = torch.tensor(noisy)
-            mask  = torch.ones(batch, L, dtype=torch.bool)   # day steps count
-        else:
-            clean = torch.zeros(batch, L, n_dim)             # no target
-            noisy = torch.zeros(batch, L, n_dim)             # no input
-            mask  = torch.zeros(batch, L, dtype=torch.bool)  # night steps ignored
-        inputs.append(noisy); targets.append(clean); masks.append(mask)
-    return torch.cat(inputs, 1), torch.cat(targets, 1), torch.cat(masks, 1)
+            sample, target = firm.generate_sample(block['n_tokens'], n_songs)
+            samples[:, t0:t1] = sample
+            targets[:, t0:t1] = target
+            mask[:, t0:t1]    = 1
+
+    return samples, targets, mask
 
 
-# Addition 2 (separate, customizable loss)
+def compute_loss(output, target, mask, states_fast, states_slow, w_fast, w_slow):
 
-def compute_loss(output, target, mask, states=None):
-    """Training loss, reconstruction error only for now.
-    Later we will add the slowness terms (KL on states, using 'states')."""
+    error_function = torch.nn.BCELoss()
 
-    bce = F.binary_cross_entropy(output, target, reduction="none").mean(-1)  # (B, T)
-    recon = bce[mask].mean()  # average over day steps
+    error = error_function(output, target, mask)
+    derivatives_fast = ((states_fast[:, 1:] - states_fast[:, :-1])**2).mean()
+    derivatives_slow = ((states_slow[:, 1:] - states_slow[:, :-1])**2).mean()
 
-    # slowness: make HPC slower than P, PFC slower than HPC,
-    # by adding a KL term on the networks' states (Alex / Nirmi / Jacy own the circuit states)
+    loss = error + w_fast * derivatives_fast + w_slow + derivatives_slow
 
-    return recon
+    return loss
 
 
 # Training loop
@@ -85,21 +77,3 @@ def train(schedule, n_dim=10, n_bands=4, n_songs=8, n_batches=301, lr=1e-2, n_hi
 
 if __name__ == "__main__":
     train(schedule)
-
-
-# Notes on seed=step
-# Because every episode is a different world, this number isn’t
-# “how well it memorized one world.” It’s “how well the network
-# can perceive a world it has never seen before.” As training goes
-# on, the weights aren’t memorizing any particular grammar
-# they’re learning a general strategy for quickly cleaning
-# up noise in whatever world shows up. That’s the meta-learning
-# It is adapting to a new world each time is harder than masterin one.
-
-
-
-# pipeline schedule = not n_tokens but n_batches   # (note: batch comes from n_bands * n_songs)
-# gonna sample from generate discography, it already has a noise.
-# specify n_tokens and n_songs
-# band X discography_object
-# definte the parameters
