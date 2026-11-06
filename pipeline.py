@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import torch
 import matplotlib
@@ -8,10 +9,16 @@ import songwriter
 import nightfever
 
 
-DEV = 'cpu'
+DEV = 'cuda'
 
 
 schedule = [{"type": "day", "n_tokens": 256},
+            {"type": "night", "n_tokens": 128},
+            {"type": "day", "n_tokens": 256},
+            {"type": "night", "n_tokens": 128},
+            {"type": "day", "n_tokens": 256},
+            {"type": "night", "n_tokens": 128},
+            {"type": "day", "n_tokens": 256},
             {"type": "night", "n_tokens": 128},
             {"type": "day", "n_tokens": 256},
             {"type": "night", "n_tokens": 128},
@@ -79,6 +86,7 @@ def store_model(model, model_name):
     torch.save(save_dict, path)
 
 
+
 def plot_loss(loss_record, model_name):
 
     os.makedirs('./models', exist_ok=True)
@@ -93,7 +101,7 @@ def plot_loss(loss_record, model_name):
     plt.close(fig)
 
 
-def name_model(noise_std, w_derivs, lr, n_dim, n_bands, n_songs, n_batches):
+def name_model(noise_std, w_derivs, lr, n_dim, n_bands, n_songs):
 
     def float_to_str(x):
         """Float to filename-safe string: 0.2 -> '0p2', 1e-05 -> '1em05'."""
@@ -105,16 +113,15 @@ def name_model(noise_std, w_derivs, lr, n_dim, n_bands, n_songs, n_batches):
                   f'lr-{float_to_str(lr)}_'
                   f'dim-{n_dim:02d}_'
                   f'bands-{n_bands:02d}_'
-                  f'songs-{n_songs:03d}_'
-                  f'batches-{n_batches:03d}')
+                  f'songs-{n_songs:03d}')
 
     return model_name
 
 
 # Training loop
-def train(schedule, n_dim=6, n_bands=8, n_songs=1, n_batches=16, n_epochs=1024, lr=1e-2, noise_std=0.2, w_derivs=(1, 10)):
+def train(schedule, n_dim=6, n_bands=32, n_songs=1, n_epochs=100, lr=2e-2, noise_std=0.2, w_derivs=(1, 10)):
 
-    model_name = name_model(noise_std, w_derivs, lr, n_dim, n_bands, n_songs, n_batches)
+    model_name = name_model(noise_std, w_derivs, lr, n_dim, n_bands, n_songs)
 
     model     = nightfever.NightFever(n_dim, DEV)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
@@ -123,6 +130,7 @@ def train(schedule, n_dim=6, n_bands=8, n_songs=1, n_batches=16, n_epochs=1024, 
     loss_record = np.empty(n_epochs)
 
     for epoch in range(n_epochs):
+        t_start = time.time()
         samples, targets, mask = build_training_epoch(schedule, n_dim, n_bands, n_songs, noise_std)
         output, states = model(samples)
 
@@ -132,14 +140,33 @@ def train(schedule, n_dim=6, n_bands=8, n_songs=1, n_batches=16, n_epochs=1024, 
         optimiser.zero_grad()
 
         loss_record[epoch] = loss.item()
+        epoch_time = time.time() - t_start
+
+        print(f"Epoch {epoch:4d} loss = {loss.item():.4f} ({epoch_time:.1f} s/epoch)")
 
         if epoch % 10 == 0:
-            print(f"Epoch {epoch:4d} loss = {loss.item():.4f}")
+            store_model(model, model_name)
+            plot_loss(loss_record[:epoch + 1], model_name)
 
     store_model(model, model_name)
     plot_loss(loss_record, model_name)
 
     return model, loss_record
+
+
+# Training sweep
+def train_all_models(schedule, n_dim=6, n_bands=32, n_songs=1, n_epochs=100, lr=1e-2):
+
+    noise_levels = [0.01, 0.2, 0.5] 
+    w_fast_vals  = [0, 1, 5]
+    w_slow_vals  = [0, 5, 20]
+
+    for noise in noise_levels:
+        for w_fast in w_fast_vals:
+            for w_slow in w_slow_vals:
+                print(f'\n\n### Training model ({noise}, ({w_fast}, ({w_slow}))) ###\n')
+                train(schedule, n_dim, n_bands, n_songs, n_epochs, lr, noise, (w_fast, w_slow))
+                print(f'\n')
 
 
 if __name__ == "__main__":
