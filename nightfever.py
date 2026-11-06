@@ -1,221 +1,184 @@
-
+import csv
+import random
+import time
 import numpy as np
-import itertools
-
-class DiscoBand():
-    """ Basic stochastic generator """
-
-    def __init__(self, n_dim, seed=None):
-
-        super(DiscoBand, self).__init__()
-
-        self.n_dim   = n_dim #this is the length of the vectors? 
-        self.seed    = seed
-        self.rng     = np.random.default_rng(seed)  # use self.rng for all sampling
-
-        #for each band, these things are set: 
-        self.harmony = self.sample_harmonic_rules() #super structure WEIGHTS 
-        self.motifs, self.super_to_sub = self.sample_disco_motifs () #sub structure WEIGHTS and super structure states to sub structure system mappings 
-        self.subsystem_state_vectors = self.sample_state_vectors() #sub structure states to vectors mappings 
-                                                                   #and the vectors change for every band... 
-
-    def sample_state_vectors(self):
-        # SUBSYSTEM STATEs TO VECTORS DICTIONARY, FIXED PER BAND, SAVED AS subsystem_state_vectors 
-
-        subsystem_states = [
-            'A1', 'A2', 'A3', 'A4', 'A5', 'A6',
-            'B1', 'B2', 'B3', 'B4', 'B5',
-            'C1', 'C2', 'C3', 'C4', 'C5', 'C6',
-            'D1', 'D2', 'D3', 'D4', 'D5',
-            'E1', 'E2', 'E3', 'E4', 'E5', 'E6',
-        ]
-
-        all_vectors = np.array(list(itertools.product([0, 1], repeat=self.n_dim)))
-        # every ordered combination of 0s and 1s of length n_dim
-        # shape (64, 6)
-        pick = self.rng.permutation(len(all_vectors))[:len(subsystem_states)]
-        # shuffle indexes, keep first 28 indexes
-
-        return dict(zip(subsystem_states, all_vectors[pick].tolist()))
-        #retrieve vectors corresponding to first 28 indexes
+import torch
+import torch.nn as nn
+import songwriter
 
 
-    def sample_harmonic_rules(self):
-        #SUPER STRUCTURE OF THE BAND (TRANS PROBS MATRIX), SAVED AS transitions 
+## Global variables
 
-        # Stochastically chooses the super-structure of the generative model.
-        # Outputs a dictionary (harmony) containing all the parameters of the superstructure.
-        # Note: use self.rng.XXX instead of np.random.XXX for sampling
-
-        a, b    = self.rng.dirichlet(np.ones(2))
-        c, d = self.rng.dirichlet(np.ones(2))
-        transitions = np.array([
-            #     1     2     3     4
-            [  0.0,    a,    b,  0.0],  # 1
-            [  0.0,  0.0,  0.0,  1.0],  # 2
-            [  0.0,    c,  0.0,    d],  # 3
-            [  1.0,  0.0,  0.0,  0.0],  # 4
-        ])
-
-        return transitions
-
-    def sample_disco_motifs(self):
-        # SUBSYSTEMS A B C D E (TRANS PROBS MATRIX) saved as motifs dict 
-        # RANDOMISES MAPPING BETWEEN SUBSYSTEM STATES A B C D E and SUPER STRUCTURE STATES 1 2 3 4 5 
-        # saved as super_to_sub dict 
-
-        # Stochastically chooses the mini-structure of the generative model A-E 
-        # Outputs a list, called motifs, containing the stochastic parameters of the motifs.
-        # Note: use self.rng.XXX instead of np.random.XXX for sampling
-
-        # Each ends in an absorbing state (all-zero row) = the motif is over.
-
-        split = lambda n: self.rng.dirichlet(np.ones(n))  # n random weights summing to 1
-        a1, a2     = split(2)
-        b1, b2     = split(2)
-        b3, b4     = split (2)
-        c1, c2     = split(2)
-        d1, d2, d3 = split(3)
-        d4, d5     = split(2)
-        e1, e2, e3 = split(3)
-         
-        motifs = {
-            'A': np.array([
-                #    1    2    3    4    5    6
-                [  0.0,  a1,  a2, 0.0, 0.0, 0.0],  # 1
-                [  0.0, 0.0, 0.0, 1.0, 0.0, 0.0],  # 2
-                [  0.0, 1.0, 0.0, 0.0, 0.0, 0.0],  # 3
-                [  0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  # 4
-                [  0.0, 0.0, 0.0, 0.0, 0.0, 1.0],  # 5
-                [  0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # 6
-            ]),
-            'B': np.array([
-                #    1    2    3    4    5
-                [  0.0,  b1,  b2, 0.0, 0.0],  # 1
-                [  0.0, 0.0, 0.0, 0.0, 1.0],  # 2
-                [  0.0, b3, 0.0, b4, 0.0],  # 3
-                [  0.0, 0.0, 1.0, 0.0, 0.0],  # 4
-                [  0.0, 0.0, 0.0, 0.0, 0.0],  # 5
-            ]),
-            'C': np.array([
-                #    1    2    3    4    5    6
-                [  0.0, 1,  0.0,  0.0, 0.0, 0.0],  # 1
-                [  0.0, 0.0, c1, c2, 0.0, 0.0],  # 2
-                [  0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  # 3
-                [  0.0, 0.0, 1, 0.0, 0.0, 0.0],  # 4
-                [  0.0, 0.0, 0.0, 0.0, 0.0, 1.0],  # 5
-                [  0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # 6
-            ]),
-            'D': np.array([
-                #    1    2    3    4    5
-                [  0.0,  d1,  d2,  d3, 0.0],  # 1
-                [  0.0, 0.0,  d4, 0.0,  d5],  # 2
-                [  0.0, 0.0, 0.0, 0.0, 1.0],  # 3
-                [  0.0, 0.0, 0.0, 0.0, 1.0],  # 4
-                [  0.0, 0.0, 0.0, 0.0, 0.0],  # 5
-            ]),
-            'E': np.array([
-                #    1    2    3    4    5    6
-                [  0.0, 1.0, 0.0, 0.0, 0.0, 0.0],  # 1
-                [  0.0, 0.0,  e1,  e2,  e3, 0.0],  # 2
-                [  0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  # 3
-                [  0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  # 4
-                [  0.0, 0.0, 0.0, 0.0, 0.0, 1.0],  # 5
-                [  0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # 6
-            ]),
-        }
-
-        # randomise [A, B, C, D, E], then map macro states 1-5 onto it
-        letters = ['A', 'B', 'C', 'D', 'E']
-        self.rng.shuffle(letters)
-        super_to_sub = {1: letters[0], 2: letters[1], 3: letters[2], 4: letters[3]} 
-        return motifs, super_to_sub
-
-    def write_song(self, n_tokens):
-        # Generates a stochastic sequence of observations of length n_tokens
-        # Outputs a numpy array of dimensions (1, n_tokens, n_dim)
-
-        # STEP 1: sample the super sequence from the super TPM.
-        current = 0                                       # always start row 0 (state 1)
-        super_sequence = [current]                        #where super sequence is saved 
-
-        while len(super_sequence) < n_tokens: # more than enough 
-            row     = self.harmony[current]           # the row for where I am now
-            current = self.rng.choice(len(row), p=row)    # choose next state according to prob distribution of row 
-            super_sequence.append(current)                # append to super_sequence 
-                                                          #super_sequence is cut off when reach n_tokens 
-
-        # STEP 2: map each super state number onto its subsystem letter
-        letter_sequence = [self.super_to_sub[s + 1] for s in super_sequence]   # +1: dict keyed 1-5, indices 0-4
-        # letter_sequence now looks like ['A', 'C', 'D', 'A', ...]
-
-        # STEP 3: expand each letter into a walk through that subsystem's own TPM
-        song_subsystem_states = []
-        for letter in letter_sequence:
-            tpm     = self.motifs[letter]                            # this subsystem's TPM
-            current = 0                                              # start in state 1 (index 0)
-            song_subsystem_states.append(f"{letter}1")               # write down where we started
-
-            while tpm[current].sum() > 0:                            # while the row is not all zeroes (i.e. it is not an absorbing state)
-                row     = tpm[current]                               # the row for where we are now
-                current = self.rng.choice(len(row), p=row)           # <-- sample from probs distribution for next state 
-                song_subsystem_states.append(f"{letter}{current + 1}")  #append the state 
-        # song_subsystem_states now looks like ['A1','A2','A4','A5','A6','C1', ...]
-
-        # STEP 4: cut to exactly n_tokens, then swap each label for its binary vector
-        song_subsystem_states = song_subsystem_states[:n_tokens]
-        song = np.array([self.subsystem_state_vectors[s] for s in song_subsystem_states])
-        return song.reshape(1, n_tokens, self.n_dim) 
+P_EPS = 1e-6
 
 
-    def write_album(self, n_tokens, n_songs):
-        # Generates a stochastic batch (n_songs batches) of sequences (n_tokens length)
-        # Outputs a numpy array of dimensions (n_songs, n_tokens, n_dim)
 
-        return np.concatenate([self.write_song(n_tokens) for _ in range(n_songs)], axis=0)
+## Classes
 
-class DiscoFirm():
-    def __init__(self, n_dim, n_bands, noise_sigma=0.1, seed=None):                    # noise_sigma = the sigma in y = x + sigma*epsilon; seed=None -> fresh OS entropy
-        *bs, ns = np.random.SeedSequence(seed).spawn(n_bands + 1)                      # one independent child seed per band (bs) + one spare for noise (ns)
-        self.bands = [DiscoBand(n_dim, s) for s in bs]                                 # each band = its own TPMs, its own 1-4 -> motif map, its own vector dictionary
-        self.noise_rng = np.random.default_rng(ns)
-        self.noise_sigma = noise_sigma                                                 # noise on a separate stream, so drawing it never perturbs the bands' data
+class NightFever(nn.Module):
+	""" Core model with the three RNN circuit """
 
-    def add_noise(self, x):
-        nu = self.noise_rng.standard_normal(x.shape)
-        return x + self.noise_sigma * abs(nu)          # epsilon ~ N(0,1) per element; new float array, x untouched; advances noise_rng each call
+	def __init__(self, n_dim, dev, sizes=None, batch_size=None, n_msg=None):
 
-    def generate_discography(self, n_tokens, n_songs):
-        d = np.concatenate([b.write_album(n_tokens, n_songs) for b in self.bands])     # (n_bands*n_songs, n_tokens, n_dim), blocked by band: rows 0..n_songs-1 are band 0
-        return d                                   
-    
-    def generate_sample(self, n_tokens, n_songs):
-        """ Returns (clean (d), noisy (y)) """
-        d = self.generate_discography(n_tokens, n_songs)
-        y = self.add_noise(d)
-        return d, y
+		super(NightFever, self).__init__()
+
+		if sizes is None:
+			n_hidden_perception = 2 * n_dim   # P smallest
+			n_hidden_fast = 4 * n_dim         # H small, limited capacity
+			n_hidden_slow = 32 * n_dim        # C much larger
+		else:
+			n_hidden_perception, n_hidden_slow, n_hidden_fast = sizes
+
+		self.n_p = n_hidden_perception
+		self.n_c = n_hidden_slow
+		self.n_h = n_hidden_fast
+		self.n_dim = n_dim
+		self.dev   = dev
+		self.batch_size = batch_size
+		self.n_msg = n_dim if n_msg is None else n_msg    # bottleneck size
+
+		# three networks, one step at a time
+		self.cell_p = nn.GRUCell(n_dim + self.n_msg, self.n_p)   # input: item + message
+		self.cell_h = nn.GRUCell(self.n_msg, self.n_h)           # input: message
+		self.cell_c = nn.GRUCell(self.n_msg, self.n_c)           # input: message
+
+		# the six links, sender's state > bottleneck msg
+		self.p_to_h = nn.Linear(self.n_p, self.n_msg)   # perception -> fast
+		self.p_to_c = nn.Linear(self.n_p, self.n_msg)   # perception -> slow
+		self.h_to_c = nn.Linear(self.n_h, self.n_msg)  # fast -> slow
+		self.h_to_p = nn.Linear(self.n_h, self.n_msg)   # fast -> perception
+		self.c_to_p = nn.Linear(self.n_c, self.n_msg)  # slow -> perception
+		self.c_to_h = nn.Linear(self.n_c, self.n_msg)   # slow -> fast
+		
+		# only P produces the output
+		self.readout = nn.Linear(self.n_p, n_dim)
+
+		self.to(dev)
+
+	def forward(self, x):
+		batch_size, n_tokens, n_dim = x.shape
+
+		# memories are reset once per episode
+		p = torch.zeros(batch_size, self.n_p, device=x.device)
+		h = torch.zeros(batch_size, self.n_h, device=x.device)
+		c = torch.zeros(batch_size, self.n_c, device=x.device)
+		
+		keys = ["p", "h", "c",
+		        "msg_p_to_h", "msg_p_to_c", "msg_h_to_p",
+		        "msg_h_to_c", "msg_c_to_p", "msg_c_to_h"]
+		record = {k: [] for k in keys}
+		ys = []
+
+		for t in range(n_tokens):
+			# messages from previous step's states
+			m_p_to_h = self.p_to_h(p)
+			m_p_to_c = self.p_to_c(p)
+			m_h_to_p = self.h_to_p(h)
+			m_h_to_c = self.h_to_c(h)
+			m_c_to_p = self.c_to_p(c)
+			m_c_to_h = self.c_to_h(c)
+
+			# each networks input (sum of two messages it receives)
+			# P receives addtional item
+			in_p = torch.cat([x[:, t], m_h_to_p + m_c_to_p], dim=-1)   # item + message
+			in_h = m_p_to_h + m_c_to_h
+			in_c = m_p_to_c + m_h_to_c
+
+			# everyone updates
+			p = self.cell_p(in_p, p)
+			h = self.cell_h(in_h, h)
+			c = self.cell_c(in_c, c)
+
+			# P produces output
+			ys.append(torch.sigmoid(self.readout(p)).clamp(P_EPS, 1 - P_EPS))
+
+			for k, v in zip(keys, [p, h, c, m_p_to_h, m_p_to_c, m_h_to_p,
+			                       m_h_to_c, m_c_to_p, m_c_to_h]):
+				record[k].append(v)
+				
+		y = torch.stack(ys, dim=1)
+		states = {k: torch.stack(v, dim=1) for k, v in record.items()}
+		return y, states
 
 
-## 
-## Use the following code to generate training sequences:
-##    Start a band x, then 
-##    x = DiscoFirm (n_dim=?, n_bands=?)
-##    d, y = x.generate_sample (n_tokens=?, n_songs=?)
-##    
-##    d is the clean sample
-##    y is the sample with noise 
-## 
-##    replace ? with parameters you want: 
-## 
-##    n_dim is how long the vectors will be 
-##    n_bands is how many bands 
-##    n_tokens is how long each song will be 
-##    n_songs is how many songs 
-## 
-##    output shape: (n_bands * n_songs, n_tokens, n_dim)
-## 
-## 
-## EXAMPLE: 
-## motown = DiscoFirm(n_dim=6, n_bands=5)
-## motown.generate_sample(n_tokens=10, n_songs=2)
-## 
+		 
+
+
+class RNN(nn.Module):
+	""" Basic RNN block"""
+
+	def __init__(self, n_dim, n_layers, n_hidden, dev, batch_size=None):
+
+		super(RNN, self).__init__()
+
+		self.n_dim     = n_dim
+		self.n_hidden  = n_hidden
+		self.n_layers  = n_layers
+		self.dev       = dev
+
+		self.rnn = nn.GRU(n_dim, n_hidden, n_layers, batch_first=True).to(self.dev)
+		self.out  = nn.Linear(n_hidden, n_dim, bias=True).to(self.dev)
+		self.sig  = nn.Sigmoid().to(self.dev)
+
+		if batch_size is not None:
+			self.init_hidden(batch_size)
+		else:
+			self.hidden = None
+
+	def init_hidden(self, batch_size):
+		h_size = [self.n_layers, batch_size, self.n_hidden]
+		self.hidden = torch.zeros(*h_size).to(self.dev)
+
+	def forward(self, x):
+
+		self.init_hidden(x.shape[0])
+		x, self.hidden = self.rnn(x, self.hidden)
+		# Keeping the outputs off 0 and 1 bounds the BCELoss gradient (see P_EPS)
+		x_out  = self.sig(self.out(x)).clamp(P_EPS, 1 - P_EPS)
+
+		return x_out
+
+
+
+
+def loss_function():
+	return nn.BCELoss()
+
+
+def train_network(n_dim=10, n_hidden=32, lr=0.01, n_batches=301, sigma=0.5):
+	# n_dim how many "notes" each step of a song has 
+
+	band = songwriter.DiscoBand(n_dim = n_dim) # one world, fixed rules
+
+	# NETWORK
+	# the GRU, 32 memory; Bigger batch = smoother but slower learning; 
+	# bigger memory = more capacity but slower.
+	net = RNN(n_dim=n_dim, n_layers=1, n_hidden=n_hidden, dev='cpu')
+	loss_fn = loss_function()
+	optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+
+	# n_hidden = 32 hidden memory, bigger = more capacity
+	# BCELoss (binary cross-entropy) -> binary note, probability between 0 and 1.
+	# Optimizer does the learning. Too big -> unstable, Too small -> slow learning
+
+
+	# Training loop
+
+	for step in range(n_batches): # = N +1 to make sure step N is included
+
+		optimizer.zero_grad()  # forget last step, clear the old corrections
+
+		# clean = noise free songs 
+		clean = band.write_album(20, 32) # 32 songs, 20 steps
+		clean = torch.tensor(clean, dtype = torch.float32) # numpy
+
+		noisy  = clean + sigma * torch.randn_like(clean) # make noisy copy of the songs (Gaussian); 0.5 is how much noise, we can increase the make the job harder
+		output = net(noisy) # network tries to clean it
+		loss   = loss_fn(output, clean) # prints out a number saying how wrong that attempt was
+
+		loss.backward() # work out which way to manipulate every weight/figure out the new nudge
+		optimizer.step() # take the manipulation/apply the nudge
+
+
+		if step % 50 == 0:
+			print(f"step {step:3d} loss {loss.item():.4f}")
